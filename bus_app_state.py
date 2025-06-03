@@ -53,13 +53,31 @@ class BusAppStateManager:
             return self.update_all_bus_locations(current_time)
 
 
+
+    def interpolate_position(self, lat1, lon1, time1, lat2, lon2, time2, now):
+        dt1 = datetime.fromtimestamp(time1, self.cyprus_tz)
+        dt2 = datetime.fromtimestamp(time2, self.cyprus_tz)
+
+        if dt2 <= dt1:
+            return lat1, lon1
+
+        """Linearly interpolate position between two timestamps"""
+        f = (now - dt1) / (dt2 - dt1)
+        f = max(0, min(1, f))  # Clamp between 0 and 1
+
+        lat = lat1 + f * (lat2 - lat1)
+        lon = lon1 + f * (lon2 - lon1)
+        return lat, lon
+
     def update_stop_table(self, stop_id, current_time=None):
         if not current_time:
             current_time = datetime.now().astimezone(self.cyprus_tz)
 
         stop_info = []
         locations = {}
-
+        stop_data = self.static_data["stops"].get(stop_id, {})
+        stop_lat = float(stop_data.get("stop_lat", 0))
+        stop_lon = float(stop_data.get("stop_lon", 0))
         for vehicle_id, data in self.live_feed_state["vehicles"].items():
             for update in data.get("stop_time_updates", []):
                 if update["stop_id"] == stop_id:
@@ -81,18 +99,31 @@ class BusAppStateManager:
                         "delay_in_minutes": delay_minutes
                     })
                     pos = data.get("current_position", (None, None))
+                    timestamp_bus = int(data.get("timestamp"))
+                    timestamp_stop = int(update["arrival"]["time"])
+                    approx_lat, approx_lon = self.interpolate_position(pos[0], pos[1], timestamp_bus, stop_lat, stop_lon, timestamp_stop, datetime.now().astimezone(self.cyprus_tz))
                     if pos:
                         locations[vehicle_id] = {
-                            "lat": pos[0],
-                            "lon": pos[1],
-                            "timestamp": data.get("timestamp")
+                            "route_number": route_number,
+                            "lat": approx_lat,
+                            "lon": approx_lon,
+                            "timestamp": datetime.fromtimestamp(int(data.get("timestamp")), self.cyprus_tz).strftime('%H:%M:%S'),
+                            "now": current_time.strftime('%H:%M:%S'),
+
                         }
+
+
 
         return {
             "now": current_time.strftime('%H:%M:%S'),
+            "stop_id": stop_id,
+            "stop_name": stop_data.get("stop_name", ""),
+            "stop_lat": stop_lat,
+            "stop_lon": stop_lon,
             "stop_table": stop_info,
             "bus_locations": locations
         }
+
 
 
     def update_future_stops(self, vehicle_id, current_time=None):
