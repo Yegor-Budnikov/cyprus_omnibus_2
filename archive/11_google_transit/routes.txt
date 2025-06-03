@@ -1,0 +1,4 @@
+﻿route_id,agency_id,route_short_name,route_long_name,route_desc,route_type,route_color,route_text_color
+9990011,11,GSP1,GSP - Ministry of Finance,,3,408080,FFFFFF
+9990012,11,GSP1,Ministry of Finance - Parliament - Omirou - GSP,,3,408080,FFFFFF
+9990999,11,GSP1,GSP-Ministry of Finance - Omirou - GSP,,3,408080,FFFFFF

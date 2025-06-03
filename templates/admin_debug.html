@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Admin Panel</title>
+  <style>
+    table { border-collapse: collapse; margin-bottom: 40px; }
+    th, td { border: 1px solid black; padding: 5px; max-width: 300px; word-wrap: break-word; }
+    h2 { margin-top: 50px; }
+    .json-preview { white-space: pre-wrap; margin-bottom: 10px; }
+    .toggle-button {
+      background-color: #eee;
+      border: none;
+      color: blue;
+      cursor: pointer;
+      text-decoration: underline;
+      font-size: 0.9em;
+    }
+  </style>
+</head>
+<body>
+  <h1>Admin Panel</h1>
+  <div id="content"></div>
+
+  <script>
+    const endpoints = [
+      "/bus_state/update",
+      "/bus_state/view",
+      "/bus_state/select_stop/0001",
+      "/bus_state/select_bus/1001",
+      "/bus_state/deselect",
+      "/bus_stops",
+      "/vehicle_positions"
+    ];
+
+    async function fetchData() {
+      const container = document.getElementById("content");
+
+      for (const url of endpoints) {
+        try {
+          const res = await fetch(url);
+          const data = await res.json();
+          const section = document.createElement("section");
+          section.innerHTML = `<h2>${url}</h2>`;
+
+          // Special handling for /bus_state/update
+          if (url === "/bus_state/update") {
+            const timestamp = new Date().toLocaleTimeString();
+            section.innerHTML += `<p style="color: green;"><strong>Feed successfully updated at ${timestamp}</strong></p>`;
+
+            // Fetch updated state right after
+            const viewRes = await fetch("/bus_state/view");
+            const viewData = await viewRes.json();
+
+            section.innerHTML += `<h3>Vehicle Overview</h3>`;
+            section.innerHTML += renderVehicleTable(viewData);
+          }
+
+          else if (Array.isArray(data)) {
+            section.innerHTML += generateTable(data);
+          } else if (typeof data === "object") {
+            section.innerHTML += generateToggleableJson(data);
+          } else {
+            section.innerHTML += `<pre>${data}</pre>`;
+          }
+
+          container.appendChild(section);
+        } catch (err) {
+          container.innerHTML += `<h2>${url}</h2><p>Error loading data: ${err.message}</p>`;
+        }
+      }
+    }
+
+function renderVehicleTable(state) {
+  if (!state || !state.entity || !state.entity.length) return "<p>No vehicle data available.</p>";
+
+  const rows = state.entity.map(entity => {
+    const vehicleId = entity.vehicle?.vehicle?.id || "N/A";
+    const tripId = entity.vehicle?.trip?.trip_id || "N/A";
+    const timestamp = entity.vehicle?.timestamp || null;
+    const readableTime = timestamp ? new Date(timestamp * 1000).toLocaleString("en-GB", { timeZone: "Asia/Nicosia" }) : "N/A";
+
+    const position = entity.vehicle?.position;
+    const currentPosition = position ? `${position.latitude.toFixed(5)}, ${position.longitude.toFixed(5)}` : "N/A";
+
+    const stopUpdates = (entity.trip_update?.stop_time_update || [])
+      .map(update => {
+        const stopId = update.stop_id || "N/A";
+        const arr = update.arrival || {};
+        const dep = update.departure || {};
+
+        const arrTime = arr.time ? formatUnixTime(arr.time) : "–";
+        const arrDelay = arr.delay ?? "–";
+
+        const depTime = dep.time ? formatUnixTime(dep.time) : "–";
+        const depDelay = dep.delay ?? "–";
+
+        return `<tr>
+          <td>${stopId}</td>
+          <td>${arrTime}</td><td>${arrDelay}</td>
+          <td>${depTime}</td><td>${depDelay}</td>
+        </tr>`;
+      }).join("");
+
+    const stopTable = stopUpdates ? `
+      <table>
+        <thead><tr><th>Stop ID</th><th>Arrival Time</th><th>Arrival Delay</th><th>Departure Time</th><th>Departure Delay</th></tr></thead>
+        <tbody>${stopUpdates}</tbody>
+      </table>
+    ` : "<p>No stop updates</p>";
+
+    return `
+      <tr>
+        <td>${vehicleId}</td>
+        <td>${tripId}</td>
+        <td>${timestamp} <br><small>${readableTime}</small></td>
+        <td>${currentPosition}</td>
+        <td>${stopTable}</td>
+      </tr>`;
+  });
+
+  return `
+    <table>
+      <thead>
+        <tr>
+          <th>Vehicle ID</th>
+          <th>Trip ID</th>
+          <th>Timestamp</th>
+          <th>Current Position</th>
+          <th>Stop Time Updates</th>
+        </tr>
+      </thead>
+      <tbody>${rows.join("")}</tbody>
+    </table>
+  `;
+}
+
+function formatUnixTime(unix) {
+  return new Date(unix * 1000).toLocaleString("en-GB", { timeZone: "Asia/Nicosia" });
+}
+
+    function generateTable(data) {
+      if (!data.length) return "<p>No data</p>";
+
+      const keys = Object.keys(data[0]);
+      let html = "<table><thead><tr>";
+      keys.forEach(k => html += `<th>${k}</th>`);
+      html += "</tr></thead><tbody>";
+
+      data.forEach(row => {
+        html += "<tr>";
+        keys.forEach(k => html += `<td>${row[k]}</td>`);
+        html += "</tr>";
+      });
+
+      html += "</tbody></table>";
+      return html;
+    }
+
+function generateToggleableJson(data) {
+  const json = JSON.stringify(data, null, 2);
+  const preview = json.slice(0, 500);
+  const isTruncated = json.length > 500;
+
+  if (!isTruncated) {
+    return `<pre class="json-preview">${escapeHtml(json)}</pre>`;
+  }
+
+  const id = "json-" + Math.random().toString(36).substr(2, 9);
+  return `
+    <pre class="json-preview" id="${id}">${escapeHtml(preview)}...</pre>
+    <button class="toggle-button" onclick="toggleJson('${id}', this, '${btoa(json)}')">Show more</button>
+  `;
+}
+
+function toggleJson(id, button, base64Json) {
+  const fullJson = atob(base64Json);
+  const pre = document.getElementById(id);
+  const showingAll = button.innerText === "Show less";
+
+  if (showingAll) {
+    pre.innerText = fullJson.slice(0, 500) + "...";
+    button.innerText = "Show more";
+  } else {
+    pre.innerText = fullJson;
+    button.innerText = "Show less";
+  }
+}
+
+function escapeHtml(text) {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+
+
+    fetchData();
+  </script>
+</body>
+</html>

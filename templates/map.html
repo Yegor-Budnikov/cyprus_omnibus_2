@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Bus App State Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 0; }
+        #map { height: 90vh; width: 100vw; }
+        #controls { position: fixed; top: 10px; left: 10px; z-index: 1000; background: white; padding: 10px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); max-width: 300px; }
+        pre { white-space: pre-wrap; word-wrap: break-word; max-height: 200px; overflow-y: auto; }
+        .status { font-weight: bold; margin-top: 10px; }
+    </style>
+</head>
+<body>
+<div id="controls">
+    <div class="status" id="connection">Status: <span style="color:red">Offline</span></div>
+    <div class="status" id="activeCount">Active Vehicles: 0</div>
+    <div class="status" id="userLocation">Your Location: Unknown</div>
+    <button onclick="locateMe()">Locate Me</button>
+    <hr>
+    <div>
+        <label>Stop ID: <input type="text" id="stopId" placeholder="Enter stop ID"></label>
+        <button onclick="selectStop()">Select Stop</button>
+    </div>
+    <div>
+        <label>Bus ID: <input type="text" id="busId" placeholder="Enter vehicle ID"></label>
+        <button onclick="selectBus()">Select Bus</button>
+    </div>
+    <div>
+        <button onclick="deselect()">Deselect</button>
+    </div>
+    <div>
+        <strong>App State (updated every 5s):</strong>
+        <pre id="output">Loading...</pre>
+    </div>
+</div>
+<div id="map"></div>
+
+<script>
+    const map = L.map('map').setView([35.1856, 33.3823], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    let vehicleMarkers = {};
+    let userMarker = null;
+    let stopMarkers = {};
+    let selectedStopMarker = null;
+    let selectedStopId = null;
+    let selectedBusId = null;
+    let popupManuallyClosed = true;
+    let justRebuiltMarkers = false;
+
+
+
+    var busIcon = L.icon({
+        iconUrl: 'https://upload.wikimedia.org/wikipedia/commons/e/e6/Bus-logo.svg',
+        iconSize: [25, 25]
+    });
+
+
+    function updateConnectionStatus(online) {
+        const el = document.getElementById('connection');
+        el.innerHTML = `Status: <span style="color:${online ? 'green' : 'red'}">${online ? 'Online' : 'Offline'}</span>`;
+    }
+
+    function updateActiveCount(count) {
+        document.getElementById('activeCount').textContent = `Active Vehicles: ${count}`;
+    }
+
+    function updateUserLocationDisplay(lat, lon) {
+        document.getElementById('userLocation').textContent = `Your Location: ${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+    }
+
+    function locateMe() {
+        deselect();
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(pos => {
+                const { latitude, longitude } = pos.coords;
+                const zoom = 17;
+                const scaleMetersPerPixel = 0.1; // ~100 meters per 1000px
+                map.setView([latitude, longitude], zoom);
+                updateUserLocationDisplay(latitude, longitude);
+                if (userMarker) map.removeLayer(userMarker);
+                console.log("Drawing user location")
+                userMarker = L.circleMarker([latitude, longitude], {
+                    radius: 6,
+                    color: 'blue',
+                    fillColor: '#30f',
+                    fillOpacity: 0.7
+                }).addTo(map).bindPopup("You are here");
+            }, err => {
+                console.warn("Geolocation failed, using default.");
+                map.setView([35.1856, 33.3823], 17);
+                updateUserLocationDisplay(35.1856, 33.3823);
+                if (userMarker) map.removeLayer(userMarker);
+                userMarker = L.circleMarker([35.1856, 33.3823], {
+                    radius: 6,
+                    color: 'blue',
+                    fillColor: '#30f',
+                    fillOpacity: 0.7
+                }).addTo(map).bindPopup("Default location");
+            });
+        } else {
+            map.setView([35.1856, 33.3823], 12);
+            updateUserLocationDisplay(35.1856, 33.3823);
+
+        }
+        updateView();
+        loadStops();
+        loadVehicles();
+    }
+
+    function selectStop() {
+        const stopId = document.getElementById('stopId').value;
+        selectedStopId = stopId;
+        selectedBusId = null;
+        popupManuallyClosed = false;
+        //fetch(`/bus_state/select_stop/${stopId}`)
+            //.then(res => res.json())
+            //.then(data => showOutput(data));
+        updateStopPopup(stopId);
+        updateView();
+        loadStops();
+        loadVehicles();
+    }
+
+    function selectBus() {
+        const busId = document.getElementById('busId').value;
+        selectedStopId = null;
+        selectedBusId = busId;
+        fetch(`/bus_state/select_bus/${busId}`)
+            .then(res => res.json())
+            .then(data => showOutput(data));
+        updateView();
+        loadStops();
+        loadVehicles();
+    }
+
+    function deselect() {
+        document.getElementById('busId').value = "";
+        document.getElementById('stopId').value = "";
+        selectedStopId = null;
+        selectedBusId = null;
+        if (selectedStopMarker) {
+            map.removeLayer(selectedStopMarker);
+            selectedStopMarker = null;
+        }
+        fetch(`/bus_state/deselect`)
+            .then(res => res.json())
+            .then(data => {
+                showOutput(data);
+                loadStops();
+                loadVehicles();
+            });
+        updateView();
+    }
+
+    function updateView() {
+        fetch(`/bus_state/view`).then(res => {
+            updateConnectionStatus(res.ok);
+            return res.json();
+        }).then(data => showOutput(data));
+    }
+
+    function showOutput(data) {
+        document.getElementById("output").textContent = JSON.stringify(data, null, 2);
+    }
+
+    function loadVehicles() {
+        fetch('/vehicle_positions')
+            .then(res => res.json())
+            .then(data => {
+                updateActiveCount(data.vehicles.length);
+
+                Object.values(vehicleMarkers).forEach(marker => map.removeLayer(marker));
+                vehicleMarkers = {};
+
+                data.vehicles.forEach(vehicle => {
+                    if (!vehicle || !vehicle.latitude || !vehicle.longitude || !vehicle.vehicle_id) {
+                        //console.warn("Skipping invalid vehicle record:", vehicle);
+                        return;
+                    }
+                    const { vehicle_id, latitude, longitude } = vehicle;
+                    const pos = L.latLng(latitude, longitude);
+                    const marker = L.marker(pos, { title: vehicle_id, icon: busIcon })
+                        .addTo(map)
+                        .bindPopup(`Bus: ${vehicle_id}`);
+
+                    marker.on('click', () => {
+                        document.getElementById('busId').value = vehicle_id;
+                        selectBus();
+                    });
+
+                    vehicleMarkers[vehicle_id] = marker;
+
+                    if (vehicle_id === selectedBusId) {
+                        //map.setView(pos, map.getZoom()); // optional
+                        marker.openPopup();
+                    }
+                });
+
+
+
+                const latLngs = data.vehicles.map(v => L.latLng(v.latitude, v.longitude));
+                if (latLngs.length > 0) {
+                    //map.fitBounds(L.latLngBounds(latLngs).pad(0.2));
+                }
+            });
+        updateView();
+    }
+
+
+
+
+
+    function loadStops() {
+        fetch('/bus_stops')
+            .then(res => res.json())
+            .then(data => {
+                const bounds = map.getBounds();
+                let count = 0;
+                const MAX_STOPS = 40;
+                justRebuiltMarkers = true;
+                if (selectedStopMarker) {
+                    map.removeLayer(selectedStopMarker);
+                    selectedStopMarker = null;
+                }
+                Object.values(stopMarkers).forEach(marker => map.removeLayer(marker));
+                stopMarkers = {};
+                data.stops.forEach(stop => {
+                    const { stop_id, stop_lat, stop_lon, stop_name } = stop;
+                    const pos = L.latLng(parseFloat(stop_lat), parseFloat(stop_lon));
+                    if (bounds.contains(pos)) count++;
+                    if (selectedStopId != null && selectedStopId === stop_id) {
+                        const pos = L.latLng(parseFloat(stop_lat), parseFloat(stop_lon));
+                        selectedStopMarker = L.marker(pos, { title: stop_name })
+                            .addTo(map);
+                        selectedStopMarker.on('click', () => selectStopByClick(stop_id));
+                        selectedStopMarker.on('popupclose', () => {
+                            if (justRebuiltMarkers) return;
+                            if (selectedStopId === stop_id) {
+                                popupManuallyClosed = true; 
+                            }
+                        });
+                        stopMarkers[stop_id] = selectedStopMarker;
+                    }
+                });
+
+
+                if (count <= MAX_STOPS && selectedStopId == null) {
+                    data.stops.forEach(stop => {
+                        const { stop_id, stop_lat, stop_lon, stop_name } = stop;
+                        if (stop_id === selectedStopId) return; // don't render twice
+                        const pos = L.latLng(parseFloat(stop_lat), parseFloat(stop_lon));
+                        if (!map.getBounds().contains(pos)) return;
+                        const marker = L.marker(pos, { title: stop_name })
+                            .addTo(map);
+                            //.bindPopup(`Stop: ${stop_name} (${stop_id})`);
+                        stopMarkers[stop_id] = marker;
+                        marker.on('click', () => selectStopByClick(stop_id));
+                        marker.on('popupclose', () => {
+                            if (justRebuiltMarkers) return;
+                            if (selectedStopId === stop_id) {
+                                popupManuallyClosed = true; 
+                            }
+                        });
+                        
+                    });
+                }
+            });
+        setTimeout(() => { justRebuiltMarkers = false; }, 100);
+        //console.log("stopMarkers:", stopMarkers);
+        updateView();
+        if (!popupManuallyClosed) updateStopPopup(selectedStopId);
+        //if (popupManuallyClosed) deselect();
+    }
+
+    function selectBusByClick(vehicleId) {
+        document.getElementById('busId').value = vehicleId;
+        selectBus();
+    }
+
+    function selectStopByClick(stopId) {
+        document.getElementById('stopId').value = stopId;
+        selectStop();
+    }
+
+    function updateStopPopup(stopId) {
+        fetch(`/bus_state/select_stop/${stopId}`)
+            .then(res => res.json())
+            .then(data => {
+                //console.log("Updating popup for stop:", stopId, "... selectedStopId: ", selectedStopId, ', selectedStopMarker: ', selectedStopMarker);
+                const stopMarker = (stopId === selectedStopId) ? selectedStopMarker : stopMarkers[stopId];
+                //if (stopId === selectedStopId) stopMarker = selectedStopMarker;
+                if (!stopMarker) return;
+
+                let stop_name = data.stop_name || stopMarker.options.title;
+
+                // ✅ Sort by eta_in_minutes ascending
+                data.stop_table.sort((a, b) => a.eta_in_minutes - b.eta_in_minutes);
+
+                let popupHtml = `<strong>Stop:</strong> ${stop_name} (${stopId}) <br><strong>Now:</strong> ${data.now}<br><strong>Upcoming buses:</strong> ${data.stop_table.length}<br><ul>`;
+                data.stop_table.forEach(bus => {
+                    popupHtml += `<li>🚌 ${bus.route_number} → ${bus.eta} (${bus.eta_in_minutes} min, delay: ${bus.delay_in_minutes} min)</li>`;
+                });
+                popupHtml += '</ul>';
+
+                stopMarker.bindPopup(popupHtml).openPopup();
+                //console.log("Updating popup for stop:", stopId, stopMarker);
+
+
+            });
+    }
+
+
+
+
+
+    // Start everything
+    navigator.permissions.query({ name: 'geolocation' }).then(result => {
+        if (result.state === 'granted') {
+            locateMe();
+        } else {
+            console.log("Geolocation not granted yet. Waiting for user action.");
+        }
+    });
+    map.on('moveend', () => {
+        loadStops();
+        loadVehicles();
+    });
+
+    //updateView();
+    //loadStops();
+    //loadVehicles();
+    setInterval(() => {
+        updateView();
+        loadVehicles();
+        if (selectedStopId && !popupManuallyClosed) updateStopPopup(selectedStopId);
+        console.log("Refresh tick: selectedStopId =", selectedStopId, "popupManuallyClosed =", popupManuallyClosed, 'justRebuiltMarkers =', justRebuiltMarkers);
+
+        if (popupManuallyClosed) deselect();
+
+    }, 5000);
+</script>
+</body>
+</html>
